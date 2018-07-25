@@ -1,0 +1,132 @@
+---
+title: "food_security"
+author: "Wenlong Liu"
+date: "July 25, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import libraries and data.
+
+```{r, message=FALSE}
+require(tidyverse)
+require(tmap)
+require("tmaptools") # required version 2.0 or later
+require(viridis)
+
+data("World", "metro", package = "tmap")
+
+food_balance <- read_csv("./Data/FAOSTAT_data_7-25-2018.csv")
+str(food_balance)
+```
+
+## Calculate self-sufficiency ratios (SSR) for each county for each year.
+
+Self_sufficency ratios (SSR) were calculated using the following equation.
+
+$$
+SSR = Production * 100 / (Production + Imports - Exports)
+$$
+
+```{r}
+ssr <- food_balance %>% 
+  # filter Element of interest.
+  filter(Element %in% c("Import Quantity", "Export Quantity", "Production")) %>% 
+  # select columns of interest
+  select(Domain, Country, Element, Item, Year, Value) %>% 
+  # add two items together.
+  spread(Item, Value) %>% 
+  mutate(Value = .$"Cereals - Excluding Beer" + .$"Starchy Roots") %>% 
+  # remove redunctancy columns.
+  select(-c("Cereals - Excluding Beer","Starchy Roots")) %>% 
+  # extend the element columns.
+  spread(Element, Value) %>% 
+  # calculate SSR.
+  mutate(SSR = .$"Production" * 100 /
+           (.$"Production" + .$"Import Quantity" - .$"Export Quantity"))
+
+ ssr 
+```
+
+### Viz SSR in map.
+
+Show the SSR in a map powered by R package (tmap)
+```{r}
+SSR_2001 = ssr %>% 
+  filter(Year == 2001) %>% 
+  mutate(name = Country) 
+
+# correct some names to match the world map.
+SSR_2001$name[SSR_2001$Country == "Bosnia and Herzegovina"] = "Bosnia and Herz."
+SSR_2001$name[SSR_2001$Country == "Bolivia (Plurinational State of)"] = "Bolivia"
+SSR_2001$name[SSR_2001$Country == "Central African Republic"] = "Central African Rep."
+SSR_2001$name[SSR_2001$Country == "Dominican Republic"] = "Dominican Rep."
+SSR_2001$name[SSR_2001$Country == "Czechia"] = "Czech Rep."
+SSR_2001$name[SSR_2001$Country == "Iran (Islamic Republic of)"] = "Iran"
+SSR_2001$name[SSR_2001$Country == "Republic of Korea"] = "Korea"
+SSR_2001$name[SSR_2001$Country == "Lao People's Democratic Republic"] = "Lao PDR" 
+SSR_2001$name[SSR_2001$Country == "Republic of Moldova"] = "Moldova"
+SSR_2001$name[SSR_2001$Country == "Russian Federation"] = "Russia"
+SSR_2001$name[SSR_2001$Country == "Sudan (former)"] = "Sudan"
+SSR_2001$name[SSR_2001$Country == "Solomon Islands"] = "Solomon Is."
+SSR_2001$name[SSR_2001$Country == "United Republic of Tanzania"] = "Tanzania"
+SSR_2001$name[SSR_2001$Country == "United States of America"] = "United States"
+SSR_2001$name[SSR_2001$Country == "Venezuela (Bolivarian Republic of)"] = "Venezuela"
+SSR_2001$name[SSR_2001$Country == "Viet Nam"] = "Vietnam"
+levels(World$name)[levels(World$name) == "Taiwan"] = "China, Taiwan Province of"
+
+World = append_data(World, SSR_2001, key.shp = "name", key.data = "name")
+```
+```{r}
+
+tm_shape(World, projection = "robin")+ 
+  tm_polygons("SSR", palette = plasma(256, begin = 0.5, direction = -1))+
+  tm_layout(title = "World Map of Self-Sufficency Ratios (%)",
+            title.size = 1.5,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.1, 0.1, 0.15, 0.05),
+            legend.position = c(0.2, 0.15),
+            frame = FALSE)+
+  tm_credits("Data @ Food and Agriculture Organization of the United Nations (FAO)")
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
