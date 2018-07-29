@@ -11,16 +11,26 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Import libraries and data.
 
-```{r, message=FALSE}
+```{r, message=T}
 require(tidyverse)
 require(tmap)
 require("tmaptools") # required version 2.0 or later
 require(viridis)
+#require(ggstatsplot)
+require(patchwork)
+require(gridExtra)
+require(grid)
+require(RColorBrewer)
 
 data("World", "metro", package = "tmap")
 
 food_balance <- read_csv("./Data/FAOSTAT_data_7-25-2018.csv")
-str(food_balance)
+#str(food_balance)
+
+# food supply is the total food.
+food_supply <- read_csv("./Data/food_supply_kcal.csv") %>% 
+  select(Country, Year, Value) %>% 
+  rename(supply = Value)
 ```
 
 ## Calculate self-sufficiency ratios (SSR) for each county for each year.
@@ -48,52 +58,234 @@ ssr <- food_balance %>%
   mutate(SSR = .$"Production" * 100 /
            (.$"Production" + .$"Import Quantity" - .$"Export Quantity"))
 
- ssr 
+colnames(ssr) <- c("Domain","Country", "Year","Export", "Import", "Production", "SSR" )
+
+ # remove wrong points.
+# some data in AUS are not right. Remove them
+# SSR > 500 is meaningless, remove these points.
+ ssr <- ssr %>% 
+   mutate(SSR = ifelse(SSR < -500, NA, SSR)) %>% 
+   mutate(SSR = ifelse( (SSR > 500 ), NA, SSR))
+```
+
+```{r}
+food_supply %>% 
+  filter( Country == "China")
+ # joint food supply
+ ssr = ssr %>% 
+   right_join(food_supply, by = c("Country", "Year") )
+ ssr
+ 
+ # add years as 10 years.
+ ssr <- ssr %>% 
+   mutate(Period = paste(floor(Year %% 100 /10)*10, "s", sep = "")) %>% 
+   # replace 0s to 00s and also reorder the period.
+   mutate(Period = ifelse(Period == "0s", "00s", Period)) %>% 
+   mutate(Period = factor(Period, levels = c("60s", "70s","80s", "90s", "00s", "10s")))
+```
+
+### PLOT SSR
+
+```{r}
+ggplot(ssr)+
+  geom_boxplot(aes(x = Year, y = SSR, group = Year))+
+  scale_y_continuous()+
+  NULL
+
+
+# plot mean and median ssr over years.
+ssr_mean = ssr %>% 
+  group_by(Year, Country) %>% 
+  summarise(mean = mean(SSR, na.rm = T),
+            median = median(SSR, na.rm = T)) %>% 
+  gather( key = stats, value = SSR, mean:median) %>% 
+  ggplot()+
+  geom_col(aes(x = as.numeric(Year), y = SSR, group = stats, fill = stats))+
+  coord_flip()
+ssr_mean
+```
+
+
+### SSR vs food supply
+
+```{r}
+theme0 <- function(...) theme( legend.position = "none",
+                               panel.background = element_blank(),
+                               panel.grid.major = element_blank(),
+                               panel.grid.minor = element_blank(),
+                               panel.spacing = unit(0,"null"),
+                               axis.ticks = element_blank(),
+                               axis.text.x = element_blank(),
+                               axis.text.y = element_blank(),
+                               axis.title.x = element_blank(),
+                               axis.title.y = element_blank(),
+                               axis.ticks.length = unit(0,"null"),
+                               axis.ticks.x = element_blank(),
+                               axis.ticks.y =element_blank(),
+                               panel.border=element_rect(color=NA),...)
+
+#colors = brewer.pal(n  = 6, name = "OrRd")
+ssr_supply = ssr %>% 
+  group_by(Country, Period) %>% 
+  summarise(SSR_mean = median(SSR, na.rm = T),
+            supply_mean = median(supply, na.rm = T)) %>%
+  ggplot()+
+  geom_point(aes(x = SSR_mean, y = supply_mean, color = Period), alpha = 0.8)+
+  scale_color_brewer(palette = "RdBu")+
+  #facet_wrap(.~Period)+
+  theme_bw(base_size = 11)+
+  annotate("segment", x = 85, xend = 85, y = -Inf, yend = Inf, linetype = "dashed")+
+  annotate("segment", x = 115, xend = 115, y = -Inf, yend = Inf, linetype = "dashed")+
+  annotate("segment", x = -Inf, xend = Inf, y = 2196, yend = 2196, linetype  = "dashed")+
+    guides(color=guide_legend(ncol=2))+
+  theme(legend.justification = c(0,0),
+        legend.position = c(1,1))+
+  labs(x = "Self-sufficient Ratios", y = "Food supply (kcal/capital/day)")+
+  scale_y_continuous(limits = c(1000,4000) )+
+  scale_x_continuous(limits = c(0, 320))+
+  annotate("rect", xmin = 17, xmax = 67, ymin = 1000, ymax = 1200, fill = "lightblue" )+
+  annotate("rect", xmin = 85, xmax = 115, ymin = 1000, ymax = 1200, fill = "lightblue" )+
+  annotate("rect", xmin = 175, xmax = 225, ymin = 1000, ymax = 1200, fill = "lightblue" )+
+  annotate("text", x = 42, y = 1100, label = "Import Food")+
+  annotate("text", x = 100, y = 1100, label = "Balanced")+
+  annotate("text", x = 200, y = 1100, label = "Export Food")+
+  annotate("rect", xmin = 300, xmax = 320, ymin = 1000, ymax = 2000, fill = "lightgreen")+
+  annotate("rect", xmin = 300, xmax = 320, ymin = 2500, ymax = 3500, fill = "lightgreen")+
+  annotate("text", x = 310, y = 1500, label = "Inadequate energy", angle = 90)+
+  annotate("text", x = 310, y = 3000, label = "Adequate energy", angle = 90)+
+  NULL
+ssr_supply
+
+ssr_dengsity = ssr %>%
+  group_by(Country, Period) %>% 
+  summarise(SSR_mean = median(SSR, na.rm = T)) %>% 
+  ggplot()+
+  theme_bw()+
+  geom_density(aes(x = SSR_mean, fill = Period), alpha = 0.8)+
+  #theme(legend.position = "none")+
+  scale_fill_brewer(palette = "RdBu")+
+  scale_x_continuous(breaks=NULL,expand=c(0.02,0)) +
+  scale_y_continuous(breaks=NULL,expand=c(0.02,0), limits = c(0,0.035))+
+  theme0(plot.margin = unit(c(1,0,0,2.5),"lines"))+
+  geom_segment(aes(x = 100, xend = 30, y = 0.03, yend = 0.03), 
+               lineend = "round", linejoin = "mitre", 
+               size = 1, arrow = arrow() )+
+  NULL
+ssr_dengsity
+supply_density = ssr %>%
+  group_by(Country, Period) %>% 
+  summarise(supply_mean = median(supply, na.rm = T)) %>% 
+  ggplot()+
+  geom_density(aes(x = supply_mean, fill = Period), alpha = 0.8)+
+  coord_flip()+
+    theme_bw()+
+  scale_fill_brewer(palette = "RdBu")+
+  #theme(legend.position = "none")+
+    scale_x_continuous(labels = NULL,breaks=NULL,expand=c(0.02,0)) +
+  scale_y_continuous(labels = NULL,breaks=NULL,expand=c(0.02,0),
+                     limits = c(0,0.001))+
+  theme0(plot.margin = unit(c(0,0,2,0),"lines"))+
+  geom_segment(aes(x = 2200, xend = 3000, y = 0.00095, yend = 0.00095), 
+               lineend = "round", linejoin = "mitre", 
+               size = 1, arrow = arrow() )+
+  NULL
+supply_density
+grid.arrange(arrangeGrob(ssr_dengsity,ncol=2,widths=c(3,1)),
+             arrangeGrob(ssr_supply,supply_density,ncol=2,widths=c(3,1)),
+             heights=c(1,3))
+if(!file.exists("supply_vs_ssr.jpg")){
+  g = grid.arrange(arrangeGrob(ssr_dengsity,ncol=2,widths=c(3,1)),
+             arrangeGrob(ssr_supply,supply_density,ncol=2,widths=c(3,1)),
+             heights=c(1,3)) 
+  ggsave(g, file = "supply_vs_ssr.jpg", dpi = 800, width = 8, height = 6)
+}
 ```
 
 ### Viz SSR in map.
 
 Show the SSR in a map powered by R package (tmap)
 ```{r}
-SSR_2001 = ssr %>% 
-  filter(Year == 2001) %>% 
+ssr_world = ssr %>% 
   mutate(name = Country) 
 
 # correct some names to match the world map.
-SSR_2001$name[SSR_2001$Country == "Bosnia and Herzegovina"] = "Bosnia and Herz."
-SSR_2001$name[SSR_2001$Country == "Bolivia (Plurinational State of)"] = "Bolivia"
-SSR_2001$name[SSR_2001$Country == "Central African Republic"] = "Central African Rep."
-SSR_2001$name[SSR_2001$Country == "Dominican Republic"] = "Dominican Rep."
-SSR_2001$name[SSR_2001$Country == "Czechia"] = "Czech Rep."
-SSR_2001$name[SSR_2001$Country == "Iran (Islamic Republic of)"] = "Iran"
-SSR_2001$name[SSR_2001$Country == "Republic of Korea"] = "Korea"
-SSR_2001$name[SSR_2001$Country == "Lao People's Democratic Republic"] = "Lao PDR" 
-SSR_2001$name[SSR_2001$Country == "Republic of Moldova"] = "Moldova"
-SSR_2001$name[SSR_2001$Country == "Russian Federation"] = "Russia"
-SSR_2001$name[SSR_2001$Country == "Sudan (former)"] = "Sudan"
-SSR_2001$name[SSR_2001$Country == "Solomon Islands"] = "Solomon Is."
-SSR_2001$name[SSR_2001$Country == "United Republic of Tanzania"] = "Tanzania"
-SSR_2001$name[SSR_2001$Country == "United States of America"] = "United States"
-SSR_2001$name[SSR_2001$Country == "Venezuela (Bolivarian Republic of)"] = "Venezuela"
-SSR_2001$name[SSR_2001$Country == "Viet Nam"] = "Vietnam"
+ssr_world$name[ssr_world$Country == "Bosnia and Herzegovina"] = "Bosnia and Herz."
+ssr_world$name[ssr_world$Country == "Bolivia (Plurinational State of)"] = "Bolivia"
+ssr_world$name[ssr_world$Country == "Central African Republic"] = "Central African Rep."
+ssr_world$name[ssr_world$Country == "Dominican Republic"] = "Dominican Rep."
+ssr_world$name[ssr_world$Country == "Czechia"] = "Czech Rep."
+ssr_world$name[ssr_world$Country == "Iran (Islamic Republic of)"] = "Iran"
+ssr_world$name[ssr_world$Country == "Republic of Korea"] = "Korea"
+ssr_world$name[ssr_world$Country == "Lao People's Democratic Republic"] = "Lao PDR" 
+ssr_world$name[ssr_world$Country == "Republic of Moldova"] = "Moldova"
+ssr_world$name[ssr_world$Country == "Russian Federation"] = "Russia"
+ssr_world$name[ssr_world$Country == "Sudan (former)"] = "Sudan"
+ssr_world$name[ssr_world$Country == "Solomon Islands"] = "Solomon Is."
+ssr_world$name[ssr_world$Country == "United Republic of Tanzania"] = "Tanzania"
+ssr_world$name[ssr_world$Country == "United States of America"] = "United States"
+ssr_world$name[ssr_world$Country == "Venezuela (Bolivarian Republic of)"] = "Venezuela"
+ssr_world$name[ssr_world$Country == "Viet Nam"] = "Vietnam"
 levels(World$name)[levels(World$name) == "Taiwan"] = "China, Taiwan Province of"
 
-World = append_data(World, SSR_2001, key.shp = "name", key.data = "name")
+# change the format from long to wide to append to World.
+ssr_world = ssr_world %>% 
+  select(Country, name, Year, SSR) %>% 
+  mutate(Year = paste("SSR",Year, sep = "" )) %>% 
+  spread(Year, SSR)
+
+ssr_world
+World_ssr = append_data(World, ssr_world, key.shp = "name", key.data = "name",ignore.duplicates=TRUE)
 ```
 ```{r}
-
-tm_shape(World, projection = "robin")+ 
-  tm_polygons("SSR", palette = plasma(256, begin = 0.5, direction = -1))+
-  tm_layout(title = "World Map of Self-Sufficency Ratios (%)",
-            title.size = 1.5,
-            title.position = c("center", "top"), 
-            inner.margins = c(0.1, 0.1, 0.15, 0.05),
-            legend.position = c(0.2, 0.15),
+# generate an animated map for ssr
+ssr_map <- tm_shape(World_ssr, projection = "robin")+ 
+  tm_polygons(paste("SSR", 1961:2013, sep = ""), 
+           breaks = c(-Inf, 60, 85, 100, 115, 140, Inf),
+           #style = "fixed", 
+           title = "SSR (%)",
+           palette = plasma(256, direction = -1),
+           border.col = "lightgrey",
+           lwd = 0.2)+
+  tm_layout(title = paste("World Map of Self-Sufficency Ratios in ", 1961:2013, sep = ""),
+            title.size = 0.5,
+            title.position = c(0.34, "top"), 
+            inner.margins = c(0.0, 0.15, 0.15, 0.050),
+            legend.position = c(0.2, 0.1),
+            legend.title.size = 0.4,
+            legend.text.size = 0.3,
+            legend.bg.alpha = 1,
             frame = FALSE)+
-  tm_credits("Data @ Food and Agriculture Organization of the United Nations (FAO)")
+  tm_credits("Data @ FAO", 
+             size = 0.3) +
+  tm_facets(free.scales.symbol.size = FALSE, nrow=1,ncol=1)
   
+tmap_animation(ssr_map, filename="World ssr.gif", width=1200, delay=50)
 ```
 
+```{r}
+countries <- c("China", "United States of America", "Japan", 
+               "India","Viet Nam", "Yemen" )
+ssr_plot_countries = ssr %>% 
+  filter(Country %in% countries) %>% 
+  #group_by(Country, Period) %>% 
+  #summarise(SSR_mean = mean(SSR, na.rm = T)) %>% 
+  mutate(Country = ifelse(Country == "United States of America", "United States", Country)) %>% 
+  ggplot()+
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 85, fill = "lightblue", alpha = 0.2)+
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 85, ymax = 115, fill = "maroon3", alpha = 0.2)+
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 115, ymax = Inf, fill = "lightgreen", alpha = 0.2)+
+  geom_point(aes(x = Year, y = SSR, color = Country, shape = Country))+
+  geom_line(aes(x = Year, y = SSR, color = Country, shape = Country))+
+  scale_x_continuous(limits = c(1957, 2013))+
+  scale_y_continuous(name = "Self-sufficient Ratios (%)", limits = c(20, 200))+
+  theme_bw(base_size = 18)+
+  #coord_flip()+  
+  annotate("text", x = 1958, y = 50, label = "Import Food", angle = 90)+
+  annotate("text", x = 1958, y = 100, label = "Balanced", angle = 90)+
+  annotate("text", x = 1958, y = 170, label = "Export Food", angle = 90)+
+  NULL
+ssr_plot_countries
+```
 
 
 
